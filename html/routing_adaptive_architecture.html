@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building an LLM Orchestration Router — Part 1</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 880px;
+    margin: 40px auto;
+    padding: 0 20px 100px;
+    line-height: 1.6;
+    color: #1d1d1f;
+  }
+  h1 { font-size: 1.9rem; border-bottom: 3px solid #2563eb; padding-bottom: 10px; }
+  h2 { font-size: 1.35rem; color: #1d4ed8; margin-top: 2.4em; }
+  h3 { font-size: 1.05rem; margin-top: 1.5em; }
+  p { color: #374151; }
+  .subtitle { font-size: 1.1rem; color: #6b7280; margin-top: -6px; }
+  .badge {
+    display: inline-block;
+    background: #2563eb;
+    color: #fff;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+  code { background: #f3f4f6; border-radius: 4px; padding: 2px 6px; font-size: 0.9em; }
+  pre { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 8px; padding: 14px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote {
+    border-left: 4px solid #f59e0b;
+    margin: 0;
+    padding: 8px 18px;
+    background: #fffbeb;
+    color: #78350f;
+    font-style: italic;
+    border-radius: 0 8px 8px 0;
+  }
+  figure { margin: 28px 0; text-align: center; }
+  figure img { max-width: 100%; border: 1px solid #e5e7eb; border-radius: 10px; }
+  figcaption { font-size: 0.88rem; color: #6b7280; margin-top: 10px; }
+  .pull-numbers {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin: 18px 0;
+  }
+  .pill {
+    border: 1px solid #e5e7eb;
+    border-radius: 999px;
+    padding: 8px 18px;
+    font-size: 0.92rem;
+    background: #fff;
+  }
+  .pill b { color: #1d4ed8; }
+  hr { border: none; border-top: 1px solid #e1e4e8; margin: 3em 0; }
+  ul li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<span class="badge">PART 1 / SERIES</span>
+<h1>Building an LLM Orchestration Router</h1>
+<p class="subtitle">From "ask the LLM which model to use" to a cheap, fast embedding-similarity classifier — with the LLM kept around as a safety net.</p>
+
+<hr>
+
+<h2>The problem: not every query deserves your most expensive model</h2>
+<p>If every incoming query — "hi", a billing complaint, a request to compare distributed-systems architectures — gets routed to the same frontier-tier model, you're paying frontier prices (and frontier latency) for queries a much cheaper model could've answered just as well. The fix is a <strong>router</strong>: something that looks at a query and decides which tier should handle it.</p>
+<pre><code>Query → Router → { Small model | Frontier model | Specialist } → Reply</code></pre>
+<blockquote>"Best for: support triage, cost optimisation"</blockquote>
+<p>We built this as a small <a href="https://github.com/langchain-ai/langgraph">LangGraph</a> workflow with three response tiers:</p>
+<ul>
+  <li><code>small</code> → <code>gpt-4o-mini</code> for greetings, quick facts, lookups</li>
+  <li><code>frontier</code> → <code>gpt-4o</code> for deep reasoning, multi-step analysis</li>
+  <li><code>specialist</code> → <code>gpt-4o</code> with a support-triage persona for account/billing/troubleshooting queries</li>
+</ul>
+
+<figure>
+  <img src="../assets/graph_visualization.png" alt="LangGraph flow: start to router to one of three responders to end">
+  <figcaption>The compiled LangGraph: every query passes through <code>router</code>, which conditionally dispatches to one of the three responder nodes.</figcaption>
+</figure>
+
+<p>The interesting question — the one this article is actually about — is: <em>how does the router decide?</em></p>
+
+<h2>V1: ask an LLM to be the router</h2>
+<p>The obvious first move (and a perfectly reasonable one to ship) is <strong>LLM-as-router</strong>: send the query to an LLM with a classification prompt and structured output, and let it pick the tier.</p>
+<pre><code>class RouteDecision(BaseModel):
+    route: Literal["small", "frontier", "specialist"] = Field(
+        description="Which model tier should handle this query"
+    )
+    reason: str = Field(description="One-sentence justification for the chosen route")
+
+
+def route_query(state: OrchestrationState) -> dict:
+    query = state["query"]
+    llm = OpenAILLM().get_llm().with_structured_output(RouteDecision)
+    chain = router_prompt | llm
+    decision = chain.invoke({"query": query})
+    return {"route": decision.route, "route_reason": decision.reason}</code></pre>
+<p>This works, and it's <em>semantically</em> about as accurate as routing gets — the classifier reads the query like a human would and reasons about intent. But look closely at the cost: <strong>every single query now makes an extra <code>gpt-4o</code> call before it even reaches the model that actually answers it.</strong> That's an additional API round-trip, additional latency, and additional spend — on top of whatever the responder itself costs. For a high-traffic support-triage system, that overhead adds up fast.</p>
+
+<h2>V2: let embeddings do the routing — and keep the LLM as a fallback</h2>
+<p>The insight: classifying "what kind of query is this?" doesn't actually require an LLM to <em>reason</em> about it — it requires recognizing <em>which group of similar things this query belongs to</em>. That's exactly what <strong>embeddings + similarity search</strong> are good at, and they're an order of magnitude cheaper and faster than a chat completion.</p>
+<p>So we replaced the LLM router with a three-step pipeline:</p>
+<ol>
+  <li><strong>Embed a small set of labeled example queries</strong> for each tier (we used 6 per tier — see <code>prompts/route_examples.py</code>)</li>
+  <li><strong>Average each tier's example embeddings into a single reference point</strong> — the <em>centroid</em> — once, up front</li>
+  <li><strong>For each incoming query</strong>, embed it and measure its cosine similarity to the three centroids; route to whichever centroid it's closest to — <em>if</em> it's confidently closest. If it's ambiguous, fall back to the original LLM router.</li>
+</ol>
+
+<h2>How the centroids are actually built</h2>
+<p>This is the part worth slowing down on, because "centroid" sounds fancier than it is. A centroid is just the <strong>average position</strong> of a group of points. Here's what that looks like with our real reference data — 6 example queries per tier, embedded with <code>text-embedding-3-small</code>, then projected from their native 1536 dimensions down to 2D with PCA purely so we can draw them on a page:</p>
+
+<figure>
+  <img src="../assets/fig1_embedding_space.svg" alt="Scatter plot of 18 real example-query embeddings, colored by tier, projected to 2D via PCA">
+  <figcaption>Fig 1 — Each dot is a real embedding of one example sentence from <code>ROUTE_EXAMPLES</code>. Notice they already separate into three visible regions <em>before we do anything else</em> — that's the embedding model recognizing that "Hi, how are you?" and "What's the capital of France?" mean similar <em>kinds</em> of things, distinct from "I was charged twice, can I get a refund?"</figcaption>
+</figure>
+
+<p>Now we collapse each cluster down to a single representative point — its centroid — by averaging the coordinates of every point in it:</p>
+
+<figure>
+  <img src="../assets/fig2_centroids.svg" alt="Same scatter plot with three centroid rings drawn at the average position of each cluster, with thin connecting lines">
+  <figcaption>Fig 2 — The thin lines show which points were averaged together; the ring is the resulting centroid, sitting at the visual "center of mass" of its cluster. These are the <em>real</em> centroids computed by <code>EmbeddingRouter._build_centroids</code> — not illustrative placeholders.</figcaption>
+</figure>
+
+<p>And here's the actual function that does it — note it embeds <em>all</em> 18 example sentences in a single batched API call (cheap, and done only once at startup), then slices the resulting vectors back into their tiers and averages each slice:</p>
+<pre><code>def _build_centroids(self, examples: dict[str, list[str]]) -> dict[str, np.ndarray]:
+    routes = list(examples.keys())
+    flat_texts = [text for route in routes for text in examples[route]]
+    flat_vectors = np.array(self.embeddings.embed_documents(flat_texts))
+
+    centroids = {}
+    offset = 0
+    for route in routes:
+        count = len(examples[route])
+        centroids[route] = flat_vectors[offset:offset + count].mean(axis=0)
+        offset += count
+    return centroids</code></pre>
+<p>That's the entire "model" — three vectors, computed once, cached for the lifetime of the process via a <code>get_embedding_router()</code> singleton. No training loop, no labeled dataset beyond a handful of examples, no GPU.</p>
+
+<h2>How classification works</h2>
+<p>Once we have the three centroids, classifying a new query is just: embed it, compute its cosine similarity to each centroid, and pick the winner — <em>but only if we're confident</em>. We gate the decision on two thresholds:</p>
+<ul>
+  <li><strong>Confidence</strong> — the best score has to clear an absolute floor (queries that don't resemble any of our examples shouldn't get force-fit into a tier)</li>
+  <li><strong>Margin</strong> — the best score has to beat the runner-up by enough that we're not just guessing between two near-identical options</li>
+</ul>
+<p>If either check fails, we return <code>None</code> and let the original LLM router make the call — preserving its semantic accuracy exactly for the ambiguous cases where it earns its cost.</p>
+<pre><code>def classify(self, query: str) -> tuple[str | None, float]:
+    query_vector = np.array(self.embeddings.embed_query(query))
+    scores = {
+        route: self._cosine_similarity(query_vector, centroid)
+        for route, centroid in self._route_centroids.items()
+    }
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    best_route, best_score = ranked[0]
+    second_best_score = ranked[1][1]
+
+    if best_score >= self.confidence_threshold and (best_score - second_best_score) >= self.margin_threshold:
+        return best_route, best_score
+    return None, best_score</code></pre>
+
+<figure>
+  <img src="../assets/fig3_classification.svg" alt="Diagram showing a real query plotted with dashed lines to each centroid, the winning centroid highlighted, and real similarity scores annotated">
+  <figcaption>Fig 3 — A real query — "Compare event sourcing vs CQRS for a high-throughput trading platform…" — embedded, plotted, and measured against all three centroids. It lands closest to the <code>frontier</code> centroid by a wide margin, clearing both gates confidently.</figcaption>
+</figure>
+
+<p>And the node that ties it together — try the embedding router first, fall back to the LLM router on low confidence <em>or</em> any error (rate limits, network blips):</p>
+<pre><code>def route_query(state: OrchestrationState) -> dict:
+    query = state["query"]
+    try:
+        route, score = get_embedding_router().classify(query)
+    except Exception:
+        route, score = None, None
+
+    if route is not None:
+        return {"route": route, "route_reason": f"Embedding similarity match (score={score:.2f})"}
+
+    llm = OpenAILLM().get_llm().with_structured_output(RouteDecision)
+    chain = router_prompt | llm
+    decision = chain.invoke({"query": query})
+    return {"route": decision.route, "route_reason": f"LLM fallback: {decision.reason}"}</code></pre>
+
+<h2>Does it actually work?</h2>
+<p>We ran it end-to-end against the live graph with one query per tier — no mocking, real OpenAI embeddings and real centroids:</p>
+<div class="pull-numbers">
+  <span class="pill">"Hi there, what is 12 + 7?" → <b>small</b> (score 0.40)</span>
+  <span class="pill">"I was charged twice for my subscription…" → <b>specialist</b> (score 0.59)</span>
+  <span class="pill">"Compare event sourcing vs CQRS…" → <b>frontier</b> (score 0.53)</span>
+</div>
+<p>All three landed on the correct tier — and all three were decided <strong>without a single extra LLM call</strong>. The fallback path is still there, quietly waiting for the genuinely ambiguous query that the embedding gate isn't confident about.</p>
+
+<h2>What's next — Part 2</h2>
+<p>This is "good enough to ship and observe." The natural follow-ups, which we'll dig into in Part 2:</p>
+<ul>
+  <li><strong>Tuning the thresholds</strong> — <code>confidence_threshold=0.30</code> and <code>margin_threshold=0.03</code> are starting points; <code>route_reason</code> logs the score on every decision, so we can mine real traffic to find the right cutoffs</li>
+  <li><strong>Measuring accuracy</strong> — running the embedding router and the LLM router side-by-side on the same traffic and comparing how often they agree (and who's right when they don't)</li>
+  <li><strong>Growing the reference set</strong> — does accuracy improve with 12 examples per tier instead of 6? Where's the point of diminishing returns?</li>
+  <li><strong>Caching routing decisions</strong> — semantically similar queries should get the same route; can we skip the embedding call entirely for near-duplicates?</li>
+</ul>
+
+<hr>
+<p style="color:#9ca3af; font-size:0.85rem;">Code references: <code>llm/embedding_router.py</code>, <code>prompts/route_examples.py</code>, <code>nodes/nodes.py</code>, <code>graph/graph_builder.py</code>.</p>
+
+</body>
+</html>

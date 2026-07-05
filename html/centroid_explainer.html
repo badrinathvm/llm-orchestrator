@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedding Centroids — Visual Explainer</title>
+<style>
+  :root {
+    --small-color: #2563eb;
+    --frontier-color: #d97706;
+    --specialist-color: #059669;
+    --query-color: #db2777;
+    --ink: #1d1d1f;
+    --muted: #6b7280;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 980px;
+    margin: 40px auto;
+    padding: 0 20px 80px;
+    line-height: 1.6;
+    color: var(--ink);
+  }
+  h1 { font-size: 1.9rem; border-bottom: 3px solid #2563eb; padding-bottom: 10px; }
+  h2 { font-size: 1.35rem; margin-top: 2.4em; color: #1d4ed8; }
+  p { color: #374151; }
+  .lede { font-size: 1.05rem; color: var(--muted); }
+  code {
+    background: #f3f4f6;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.9em;
+  }
+  .step {
+    display: inline-block;
+    background: #2563eb;
+    color: #fff;
+    border-radius: 50%;
+    width: 26px;
+    height: 26px;
+    text-align: center;
+    line-height: 26px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    margin-right: 8px;
+  }
+  .panel {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 22px;
+    margin: 20px 0;
+    background: #fafafa;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin: 14px 0 6px;
+    font-size: 0.92rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 7px; }
+  .swatch { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+  .swatch.ring { background: transparent; border: 3px solid; border-radius: 50%; }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  .caption { text-align: center; font-size: 0.88rem; color: var(--muted); margin-top: 10px; }
+  .controls { text-align: center; margin: 14px 0; }
+  button {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #9ca3af; cursor: default; }
+  .readout {
+    margin-top: 16px;
+    font-size: 0.92rem;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .readout div { margin: 4px 0; }
+  .score-bar-track { background: #e5e7eb; border-radius: 5px; height: 10px; flex: 1; overflow: hidden; }
+  .score-bar-fill { height: 100%; border-radius: 5px; transition: width 0.6s ease; }
+  .score-row { display: flex; align-items: center; gap: 10px; }
+  .score-row span:first-child { width: 90px; font-weight: 600; }
+  .score-row span:last-child { width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+  .winner { font-weight: 700; }
+  .note {
+    border-left: 4px solid #f59e0b;
+    background: #fffbeb;
+    padding: 10px 16px;
+    border-radius: 0 8px 8px 0;
+    color: #78350f;
+    font-size: 0.92rem;
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 760px) { .grid-2 { grid-template-columns: 1fr; } }
+  .mini-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: #fff;
+  }
+  .mini-card h3 { margin: 0 0 6px; font-size: 1rem; }
+</style>
+</head>
+<body>
+
+<h1>What does "building centroids" mean?</h1>
+<p class="lede">A visual walkthrough of how the embedding router in <code>llm/embedding_router.py</code> turns a handful of example sentences into three reference points — and how it uses them to classify new queries without calling an LLM.</p>
+
+<h2><span class="step">1</span>Every sentence becomes a point</h2>
+<p>An embedding model converts each example query into a list of numbers (a <em>vector</em>) that captures its meaning. We can't draw a 1536-dimensional space, so imagine squishing it down to 2D: sentences with similar meaning land near each other.</p>
+
+<div class="panel">
+  <div class="legend">
+    <span class="legend-item"><span class="swatch" style="background:var(--small-color)"></span> small — greetings, quick facts</span>
+    <span class="legend-item"><span class="swatch" style="background:var(--frontier-color)"></span> frontier — complex reasoning</span>
+    <span class="legend-item"><span class="swatch" style="background:var(--specialist-color)"></span> specialist — support / billing</span>
+  </div>
+  <svg id="step1-svg" viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg"></svg>
+  <p class="caption">Each dot = one example sentence from <code>prompts/route_examples.py</code>, placed by what it <em>means</em>. Sentences about the same kind of thing naturally cluster together.</p>
+</div>
+
+<h2><span class="step">2</span>The centroid is just the average position of a cluster</h2>
+<p>For each tier, we add up the coordinates of all its example points and divide by the count — exactly like averaging a list of numbers, just done in many dimensions at once. The result is one new point sitting at the "center of mass" of that cluster: the <strong>centroid</strong>.</p>
+
+<div class="panel">
+  <div class="legend">
+    <span class="legend-item"><span class="swatch ring" style="border-color:var(--small-color)"></span> small centroid</span>
+    <span class="legend-item"><span class="swatch ring" style="border-color:var(--frontier-color)"></span> frontier centroid</span>
+    <span class="legend-item"><span class="swatch ring" style="border-color:var(--specialist-color)"></span> specialist centroid</span>
+  </div>
+  <div class="controls">
+    <button id="centroid-btn">Compute centroids ▸</button>
+  </div>
+  <svg id="step2-svg" viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg"></svg>
+  <p class="caption">Click the button — each ring converges to the average of its cluster's dots. That's <code>_build_centroids()</code>: <code>flat_vectors[offset:offset+count].mean(axis=0)</code>.</p>
+</div>
+
+<div class="note">
+  This only happens <strong>once</strong> (cached by <code>get_embedding_router()</code> as a singleton) — not on every request. After this step we throw away the 18 individual example points and keep just the 3 centroids.
+</div>
+
+<h2><span class="step">3</span>Classifying a new query: closest centroid wins</h2>
+<p>When a real query comes in, we embed it into the same space and measure how close it is to each of the three centroids (cosine similarity — a score from -1 to 1, where higher means "points in the same direction / similar meaning"). Try the examples below:</p>
+
+<div class="panel">
+  <div class="controls">
+    <button data-q="small">"Hi there, what is 12 + 7?"</button>
+    <button data-q="frontier">"Compare event sourcing vs CQRS for a trading platform"</button>
+    <button data-q="specialist">"I was charged twice, can I get a refund?"</button>
+    <button data-q="ambiguous">"Explain distributed consensus and your refund policy"</button>
+  </div>
+  <svg id="step3-svg" viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div class="readout" id="readout">
+    <p style="margin:0; color:var(--muted)">Click a query above to see how it gets classified.</p>
+  </div>
+</div>
+
+<h2>Why bother averaging instead of comparing to all 18 examples?</h2>
+<div class="grid-2">
+  <div class="mini-card">
+    <h3>Without centroids</h3>
+    <p style="margin:0">Every incoming query would need <strong>18 similarity comparisons</strong> (one per example sentence), then some way to aggregate "which group won."</p>
+  </div>
+  <div class="mini-card">
+    <h3>With centroids</h3>
+    <p style="margin:0">Pre-average each group of 6 down to <strong>1 reference point</strong>. Now classification is just <strong>3 comparisons</strong> — fast, simple, and the noisy individual examples get smoothed into one stable "average meaning."</p>
+  </div>
+</div>
+
+<h2>Where this lives in the code</h2>
+<p>In <code>llm/embedding_router.py</code>:</p>
+<ul>
+  <li><code>_build_centroids()</code> — embeds all 18 reference sentences in one batch call, slices them back into their tiers, and averages each slice into a centroid (steps 1 &amp; 2 above).</li>
+  <li><code>classify()</code> — embeds the incoming query, computes cosine similarity to each of the 3 centroids, and picks the winner only if it's confident enough and clearly ahead of the runner-up (step 3 above). Otherwise it returns <code>None</code> and <code>route_query</code> in <code>nodes/nodes.py</code> falls back to the LLM router.</li>
+</ul>
+
+<script>
+(function() {
+  const colors = { small: 'var(--small-color)', frontier: 'var(--frontier-color)', specialist: 'var(--specialist-color)' };
+  const colorHex = { small: '#2563eb', frontier: '#d97706', specialist: '#059669', query: '#db2777' };
+
+  // Hand-placed 2D "embedding" coordinates — purely illustrative, arranged into 3 visible clusters.
+  const clusters = {
+    small: [[140,90],[175,70],[120,130],[165,135],[105,75],[150,150]],
+    frontier: [[470,80],[510,60],[440,120],[505,140],[470,150],[530,105]],
+    specialist: [[300,290],[260,320],[340,300],[290,340],[330,260],[250,270]]
+  };
+
+  const centroidOf = (pts) => {
+    const n = pts.length;
+    const sx = pts.reduce((a,p) => a+p[0], 0);
+    const sy = pts.reduce((a,p) => a+p[1], 0);
+    return [sx/n, sy/n];
+  };
+  const centroids = {
+    small: centroidOf(clusters.small),
+    frontier: centroidOf(clusters.frontier),
+    specialist: centroidOf(clusters.specialist)
+  };
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs) => {
+    const e = document.createElementNS(ns, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+
+  function dot(svg, x, y, color, r=8, opacity=1) {
+    svg.appendChild(el('circle', { cx: x, cy: y, r, fill: color, opacity, stroke: '#fff', 'stroke-width': 1.5 }));
+  }
+  function ring(svg, x, y, color, r=13) {
+    return el('circle', { cx: x, cy: y, r, fill: 'none', stroke: color, 'stroke-width': 3 });
+  }
+  function label(svg, x, y, text, color) {
+    const t = el('text', { x, y, fill: color, 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle' });
+    t.textContent = text;
+    svg.appendChild(t);
+  }
+
+  // ---- Step 1: scattered example points ----
+  const s1 = document.getElementById('step1-svg');
+  for (const tier in clusters) {
+    clusters[tier].forEach(([x,y]) => dot(s1, x, y, colorHex[tier]));
+    const c = centroidOf(clusters[tier]);
+    label(s1, c[0], c[1] - 26, tier, colorHex[tier]);
+  }
+
+  // ---- Step 2: animated convergence to centroid ----
+  const s2 = document.getElementById('step2-svg');
+  const s2dots = {};
+  const s2rings = {};
+  for (const tier in clusters) {
+    s2dots[tier] = clusters[tier].map(([x,y]) => {
+      const c = el('circle', { cx: x, cy: y, r: 8, fill: colorHex[tier], opacity: 0.55, stroke: '#fff', 'stroke-width': 1.5 });
+      s2.appendChild(c);
+      return { el: c, orig: [x,y] };
+    });
+    const r = ring(s2, centroids[tier][0], centroids[tier][1], colorHex[tier]);
+    r.setAttribute('opacity', 0);
+    s2.appendChild(r);
+    s2rings[tier] = r;
+  }
+
+  let computed = false;
+  document.getElementById('centroid-btn').addEventListener('click', function() {
+    if (computed) return;
+    computed = true;
+    this.textContent = 'Centroids computed ✓';
+    this.disabled = true;
+    for (const tier in clusters) {
+      const target = centroids[tier];
+      s2dots[tier].forEach(({el: dotEl, orig}, i) => {
+        // dots stay in place; we draw a connecting line to the centroid to show
+        // "these are the points being averaged together"
+        const line = el('line', { x1: orig[0], y1: orig[1], x2: target[0], y2: target[1], stroke: colorHex[tier], 'stroke-width': 1, opacity: 0 });
+        s2.insertBefore(line, dotEl);
+        let op = 0;
+        const fade = () => { op += 0.02; line.setAttribute('opacity', Math.min(0.35, op)); if (op < 0.35) requestAnimationFrame(fade); };
+        setTimeout(() => requestAnimationFrame(fade), i * 60);
+      });
+      // ring scales in
+      const r = s2rings[tier];
+      let scale = 0;
+      r.setAttribute('r', 2);
+      const grow = () => {
+        scale += 0.06;
+        const radius = 2 + 11 * Math.min(1, scale);
+        r.setAttribute('r', radius);
+        r.setAttribute('opacity', Math.min(1, scale));
+        if (scale < 1) requestAnimationFrame(grow);
+      };
+      setTimeout(() => requestAnimationFrame(grow), 500);
+      setTimeout(() => label(s2, target[0], target[1] - 24, tier + ' centroid', colorHex[tier]), 1300);
+    }
+  });
+
+  // ---- Step 3: classify a query against centroids ----
+  const s3 = document.getElementById('step3-svg');
+  // Background: faint clusters + solid centroids always visible
+  for (const tier in clusters) {
+    clusters[tier].forEach(([x,y]) => dot(s3, x, y, colorHex[tier], 6, 0.25));
+  }
+  const s3rings = {};
+  for (const tier in centroids) {
+    const [cx, cy] = centroids[tier];
+    dot(s3, cx, cy, colorHex[tier], 9);
+    const r = ring(s3, cx, cy, colorHex[tier], 13);
+    s3.appendChild(r);
+    s3rings[tier] = r;
+    label(s3, cx, cy - 24, tier, colorHex[tier]);
+  }
+
+  let queryDot = null;
+  let queryLines = [];
+
+  const queryPlacements = {
+    small:      { pos: [150, 105], scores: { small: 0.40, frontier: 0.07, specialist: 0.18 }, route: 'small', reason: 'Embedding similarity match (score=0.40)' },
+    frontier:   { pos: [485, 95],  scores: { small: 0.05, frontier: 0.53, specialist: 0.21 }, route: 'frontier', reason: 'Embedding similarity match (score=0.53)' },
+    specialist: { pos: [295, 300], scores: { small: 0.09, frontier: 0.16, specialist: 0.59 }, route: 'specialist', reason: 'Embedding similarity match (score=0.59)' },
+    ambiguous:  { pos: [340, 195], scores: { small: 0.06, frontier: 0.35, specialist: 0.27 }, route: 'frontier', reason: 'Embedding similarity match (score=0.35) — close, but margin over 2nd place cleared the gate' }
+  };
+
+  const tierName = { small: 'Small', frontier: 'Frontier', specialist: 'Specialist' };
+
+  document.querySelectorAll('[data-q]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-q');
+      const cfg = queryPlacements[key];
+
+      // clear previous query visuals
+      if (queryDot) { s3.removeChild(queryDot); queryDot = null; }
+      queryLines.forEach(l => s3.removeChild(l));
+      queryLines = [];
+      for (const t in s3rings) { s3rings[t].setAttribute('stroke-width', 3); s3rings[t].setAttribute('r', 13); }
+
+      const [qx, qy] = cfg.pos;
+
+      // draw dashed lines from query to each centroid
+      for (const tier in centroids) {
+        const [cx, cy] = centroids[tier];
+        const line = el('line', { x1: qx, y1: qy, x2: cx, y2: cy, stroke: colorHex[tier], 'stroke-width': 1.5, 'stroke-dasharray': '5,4', opacity: 0.6 });
+        s3.appendChild(line);
+        queryLines.push(line);
+      }
+
+      // query point (drawn last so it's on top)
+      queryDot = el('circle', { cx: qx, cy: qy, r: 10, fill: colorHex.query, stroke: '#fff', 'stroke-width': 2 });
+      s3.appendChild(queryDot);
+      const qlabel = el('text', { x: qx, y: qy - 18, fill: colorHex.query, 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle' });
+      qlabel.textContent = '? query';
+      s3.appendChild(qlabel);
+      queryLines.push(qlabel);
+
+      // highlight winner ring
+      const ranked = Object.entries(cfg.scores).sort((a,b) => b[1]-a[1]);
+      const winner = ranked[0][0];
+      s3rings[winner].setAttribute('stroke-width', 5);
+      s3rings[winner].setAttribute('r', 16);
+
+      // readout
+      const readout = document.getElementById('readout');
+      let html = `<div style="margin-bottom:8px;"><strong>Cosine similarity to each centroid:</strong></div>`;
+      ranked.forEach(([tier, score]) => {
+        const pct = Math.max(0, score) * 100;
+        const isWinner = tier === winner;
+        html += `<div class="score-row ${isWinner ? 'winner' : ''}">
+          <span style="color:${colorHex[tier]}">${tierName[tier]}</span>
+          <span class="score-bar-track"><span class="score-bar-fill" style="width:${pct}%; background:${colorHex[tier]}"></span></span>
+          <span>${score.toFixed(2)}</span>
+        </div>`;
+      });
+      html += `<div style="margin-top:10px; padding-top:10px; border-top:1px solid #e5e7eb;">
+        <strong>Decision:</strong> route = <span style="color:${colorHex[cfg.route]}; font-weight:700">${cfg.route}</span><br>
+        <span style="color:var(--muted)">route_reason: "${cfg.reason}"</span>
+      </div>`;
+      readout.innerHTML = html;
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
