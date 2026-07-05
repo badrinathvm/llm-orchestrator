@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Plan: Implement the "Adaptive Routing" LLM Orchestration Pattern</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 880px; margin: 40px auto; padding: 0 20px; line-height: 1.55; color: #1d1d1f; }
+  h1 { font-size: 1.7rem; border-bottom: 3px solid #2e7d32; padding-bottom: 8px; }
+  h2 { font-size: 1.3rem; color: #2e7d32; margin-top: 2.2em; }
+  h3 { font-size: 1.05rem; margin-top: 1.4em; }
+  pre { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; padding: 14px; overflow-x: auto; }
+  code { background: #f6f8fa; border-radius: 4px; padding: 2px 5px; font-size: 0.92em; }
+  pre code { background: none; padding: 0; }
+  ul { padding-left: 1.4em; }
+  li { margin-bottom: 6px; }
+  .badge { display: inline-block; background: #2e7d32; color: #fff; border-radius: 4px; padding: 3px 10px; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.03em; }
+  blockquote { border-left: 4px solid #ffa000; margin: 0; padding: 6px 16px; background: #fff8e1; color: #5d4037; font-style: italic; }
+  .files li { margin-bottom: 14px; }
+  hr { border: none; border-top: 1px solid #e1e4e8; margin: 2.5em 0; }
+</style>
+</head>
+<body>
+
+<span class="badge">PLAN</span>
+<h1>Implement the "Adaptive Routing" LLM orchestration pattern</h1>
+
+<h2>Context</h2>
+<p>The reference image <code>/Users/ranibadri/Documents/projects/Cowork/llm_orchestration_enterprises.png</code> shows 6 enterprise LLM orchestration patterns. The user wants to implement the <strong>Routing (Adaptive)</strong> pattern:</p>
+
+<pre><code>Query &rarr; Router &rarr; { Small model | Frontier model | Specialist } &rarr; Reply</code></pre>
+
+<blockquote>"Best for: Support triage, cost optimisation"</blockquote>
+
+<p>The router inspects the incoming query and dispatches it to the cheapest model capable of handling it (a fast/cheap "small" model for simple queries, a powerful "frontier" model for complex reasoning, or a "specialist" model/prompt for domain-specific queries), instead of always paying for the most expensive model.</p>
+
+<p>The project already has a minimal LangGraph scaffold from the previous session (<code>graph/graph_builder.py</code>, <code>nodes/nodes.py</code>, <code>state/orchestration_state.py</code>, <code>llm/llm.py</code>, <code>server.py</code>, <code>models/models.py</code>) with a single placeholder <code>generate</code> node wired <code>START &rarr; generate &rarr; END</code>. This task replaces that placeholder graph with a real routing graph, reusing the existing <code>OpenAILLM</code> wrapper, <code>OrchestrationState</code>, <code>GraphBuilder</code>, and FastAPI plumbing.</p>
+
+<h2>Design</h2>
+
+<p><strong>Router</strong>: an LLM call with structured output that classifies the query into one of three routes &mdash; <code>small</code>, <code>frontier</code>, <code>specialist</code> &mdash; plus a short <code>reason</code> (useful for the support-triage/cost-optimization story: you can log <em>why</em> a query was routed where).</p>
+
+<p><strong>Responders</strong> (one node per branch, all returning <code>{"result": ...}</code>):</p>
+<ul>
+  <li><code>small_model_responder</code> &mdash; cheap/fast model (<code>gpt-4o-mini</code>) for simple/short queries (e.g. FAQ-style, greetings)</li>
+  <li><code>frontier_model_responder</code> &mdash; most capable model (<code>gpt-4o</code>) for complex/multi-step reasoning</li>
+  <li><code>specialist_responder</code> &mdash; <code>gpt-4o</code> with a domain-specific system prompt (e.g. a support/triage specialist persona) for domain-specific queries</li>
+</ul>
+
+<p><strong>Graph wiring</strong> (<code>GraphBuilder.build_graph</code>):</p>
+<pre><code>START &rarr; router &rarr;(conditional on state["route"])&rarr; { small_model_responder | frontier_model_responder | specialist_responder } &rarr; END</code></pre>
+<p>This mirrors the conditional-edge pattern already used in the KnowledgeGraph reference (<code>KnowledgeGraph/graph/graph_builder.py:16-20</code>, routing to <code>rerank</code> vs <code>generate</code> based on <code>state["strategy"]</code>), just with three branches instead of two.</p>
+
+<h2>Files to change</h2>
+<ol class="files">
+  <li>
+    <strong><code>llm/llm.py</code></strong> &mdash; generalize <code>OpenAILLM</code> to accept a <code>model</code> (and optional <code>temperature</code>) so different routes can use different models:
+    <ul>
+      <li><code>__init__(self, model: str = "gpt-4o", temperature: float = 0.0)</code>, store and pass through to <code>ChatOpenAI(api_key=..., model=self.model, temperature=self.temperature)</code>.</li>
+      <li>Keeps the existing try/except + <code>load_dotenv()</code> structure; just parametrizes the hardcoded <code>"gpt-4o"</code>.</li>
+    </ul>
+  </li>
+  <li>
+    <strong><code>state/orchestration_state.py</code></strong> &mdash; add routing metadata fields:
+    <ul>
+      <li><code>route: str</code> (<code>"small" | "frontier" | "specialist"</code>)</li>
+      <li><code>route_reason: str</code> (router's justification, surfaced for triage/cost-optimization visibility)</li>
+    </ul>
+  </li>
+  <li>
+    <strong><code>prompts/__init__.py</code></strong> (empty) and <strong><code>prompts/prompt.py</code></strong> (new package, mirroring <code>KnowledgeGraph/prompts/prompt.py</code>):
+    <ul>
+      <li>A router classification prompt instructing the LLM to pick one of <code>small</code>/<code>frontier</code>/<code>specialist</code> based on query complexity/domain, with a brief reason.</li>
+      <li>A specialist system prompt (e.g. a "senior support triage specialist" persona) used by <code>specialist_responder</code>.</li>
+    </ul>
+  </li>
+  <li>
+    <strong><code>nodes/nodes.py</code></strong> &mdash; replace the placeholder <code>generate</code> with:
+    <ul>
+      <li><code>route_query(state) -&gt; dict</code>: builds an LLM via <code>OpenAILLM().get_llm()</code>, calls <code>.with_structured_output(...)</code> against a small Pydantic schema (<code>route: Literal["small","frontier","specialist"]</code>, <code>reason: str</code>) using the router prompt from <code>prompts/prompt.py</code>, returns <code>{"route": ..., "route_reason": ...}</code>.</li>
+      <li><code>small_model_responder(state) -&gt; dict</code>: <code>OpenAILLM(model="gpt-4o-mini").get_llm()</code>, invoke directly with the query, return <code>{"result": response.content}</code>.</li>
+      <li><code>frontier_model_responder(state) -&gt; dict</code>: <code>OpenAILLM(model="gpt-4o").get_llm()</code>, invoke directly with the query, return <code>{"result": response.content}</code>.</li>
+      <li><code>specialist_responder(state) -&gt; dict</code>: <code>OpenAILLM(model="gpt-4o").get_llm()</code>, invoke with the specialist system prompt + query (e.g. via <code>ChatPromptTemplate</code> or a simple message list), return <code>{"result": response.content}</code>.</li>
+    </ul>
+  </li>
+  <li>
+    <strong><code>graph/graph_builder.py</code></strong> &mdash; rewire <code>build_graph</code>:
+    <ul>
+      <li>Add nodes <code>router</code>, <code>small_model_responder</code>, <code>frontier_model_responder</code>, <code>specialist_responder</code>.</li>
+      <li><code>add_edge(START, "router")</code></li>
+      <li><code>add_conditional_edges("router", lambda state: state["route"], {"small": "small_model_responder", "frontier": "frontier_model_responder", "specialist": "specialist_responder"})</code></li>
+      <li><code>add_edge(&lt;each responder&gt;, END)</code></li>
+      <li>Update <code>run(query)</code> to seed <code>route</code> and <code>route_reason</code> as <code>""</code> in the initial state alongside existing <code>query</code>/<code>context</code>/<code>result</code>.</li>
+    </ul>
+  </li>
+  <li>
+    <strong><code>models/models.py</code></strong> &mdash; extend <code>QueryResponse</code> with <code>route: str</code> and <code>route_reason: str</code> so the API surfaces routing decisions (directly supports the "support triage / cost optimisation" use case &mdash; callers can see which model tier handled their request and why).
+  </li>
+  <li>
+    <strong><code>server.py</code></strong> &mdash; pass the new fields through: <code>QueryResponse(answer=response["result"], route=response["route"], route_reason=response["route_reason"])</code>.
+  </li>
+</ol>
+
+<h2>Verification</h2>
+<ul>
+  <li><code>python -c "from graph.graph_builder import GraphBuilder"</code> and other modules still import cleanly (no circular imports between <code>nodes</code>, <code>prompts</code>, <code>state</code>, <code>llm</code>, <code>graph</code>).</li>
+  <li>Start the server (<code>uv run python server.py</code> or the existing "Debug API Server" VS Code launch config) and exercise <code>/query</code> with a few different kinds of questions, e.g.:
+    <ul>
+      <li>A trivial greeting ("hi", "what's 2+2") &rarr; expect <code>route: "small"</code></li>
+      <li>A complex multi-step reasoning question &rarr; expect <code>route: "frontier"</code></li>
+      <li>A support/triage-flavored question &rarr; expect <code>route: "specialist"</code></li>
+    </ul>
+    Confirm the <code>route</code> and <code>route_reason</code> fields in the JSON response plausibly match the query, and that <code>answer</code> is non-empty (requires a valid <code>OPENAI_API_KEY</code> in <code>.env</code>).
+  </li>
+  <li>Optionally add a log line in <code>route_query</code> (or rely on <code>DEBUG</code>/uvicorn <code>--log-level debug</code>) to observe the router's decision per request while testing.</li>
+</ul>
+
+<hr>
+<p style="color:#888; font-size:0.85rem;">Exported from the plan file <code>~/.claude/plans/scalable-knitting-kahan.md</code>.</p>
+
+</body>
+</html>

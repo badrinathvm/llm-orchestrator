@@ -1,0 +1,25 @@
+<svg viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="640" height="380" fill="#fafafa" stroke="#e5e7eb" />
+<text x="320.0" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#1d1d1f">Fig 1 — Real reference-example embeddings, projected to 2D via PCA</text>
+<circle cx="225.3" cy="154.4" r="8" fill="#2563eb" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="247.6" cy="80.3" r="8" fill="#2563eb" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="235.8" cy="78.5" r="8" fill="#2563eb" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="357.5" cy="122.7" r="8" fill="#2563eb" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="237.0" cy="120.5" r="8" fill="#2563eb" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="202.2" cy="50.0" r="8" fill="#2563eb" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<text x="250.9" y="73.1" fill="#2563eb" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">small</text>
+<circle cx="582.1" cy="268.1" r="8" fill="#d97706" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="532.7" cy="274.0" r="8" fill="#d97706" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="532.0" cy="244.0" r="8" fill="#d97706" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="543.7" cy="279.1" r="8" fill="#d97706" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="552.7" cy="245.1" r="8" fill="#d97706" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="590.0" cy="239.3" r="8" fill="#d97706" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<text x="555.5" y="230.3" fill="#d97706" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">frontier</text>
+<circle cx="104.4" cy="330.0" r="8" fill="#059669" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="50.0" cy="292.0" r="8" fill="#059669" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="151.2" cy="297.7" r="8" fill="#059669" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="68.8" cy="319.4" r="8" fill="#059669" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="130.3" cy="282.4" r="8" fill="#059669" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="118.1" cy="285.8" r="8" fill="#059669" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<text x="103.8" y="273.2" fill="#059669" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">specialist</text>
+</svg>

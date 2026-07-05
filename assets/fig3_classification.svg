@@ -1,0 +1,37 @@
+<svg viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="640" height="380" fill="#fafafa" stroke="#e5e7eb" />
+<text x="320.0" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#1d1d1f">Fig 3 — Real query routed to "frontier" (score=0.53) via cosine similarity</text>
+<circle cx="225.3" cy="154.4" r="5" fill="#2563eb" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="247.6" cy="80.3" r="5" fill="#2563eb" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="235.8" cy="78.5" r="5" fill="#2563eb" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="357.5" cy="122.7" r="5" fill="#2563eb" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="237.0" cy="120.5" r="5" fill="#2563eb" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="202.2" cy="50.0" r="5" fill="#2563eb" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="582.1" cy="268.1" r="5" fill="#d97706" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="532.7" cy="274.0" r="5" fill="#d97706" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="532.0" cy="244.0" r="5" fill="#d97706" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="543.7" cy="279.1" r="5" fill="#d97706" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="552.7" cy="245.1" r="5" fill="#d97706" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="590.0" cy="239.3" r="5" fill="#d97706" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="104.4" cy="330.0" r="5" fill="#059669" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="50.0" cy="292.0" r="5" fill="#059669" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="151.2" cy="297.7" r="5" fill="#059669" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="68.8" cy="319.4" r="5" fill="#059669" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="130.3" cy="282.4" r="5" fill="#059669" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="118.1" cy="285.8" r="5" fill="#059669" opacity="0.25" stroke="#fff" stroke-width="1.5" />
+<circle cx="250.9" cy="101.1" r="9" fill="#2563eb" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="250.9" cy="101.1" r="14" fill="none" stroke="#2563eb" stroke-width="3" />
+<text x="250.9" y="73.1" fill="#2563eb" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">small</text>
+<line x1="495.7" y1="238.6" x2="250.9" y2="101.1" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="5,4" opacity="0.6" />
+<circle cx="555.5" cy="258.3" r="9" fill="#d97706" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="555.5" cy="258.3" r="17" fill="none" stroke="#d97706" stroke-width="5" />
+<text x="555.5" y="230.3" fill="#d97706" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">frontier</text>
+<line x1="495.7" y1="238.6" x2="555.5" y2="258.3" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5,4" opacity="0.6" />
+<circle cx="103.8" cy="301.2" r="9" fill="#059669" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<circle cx="103.8" cy="301.2" r="14" fill="none" stroke="#059669" stroke-width="3" />
+<text x="103.8" y="273.2" fill="#059669" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">specialist</text>
+<line x1="495.7" y1="238.6" x2="103.8" y2="301.2" stroke="#059669" stroke-width="1.5" stroke-dasharray="5,4" opacity="0.6" />
+<circle cx="495.7" cy="238.6" r="10" fill="#db2777" opacity="1.0" stroke="#fff" stroke-width="1.5" />
+<text x="495.7" y="222.6" fill="#db2777" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">? query</text>
+<text x="320.0" y="364.0" fill="#374151" font-size="12" font-weight="600" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif">frontier=0.53  |  small=0.10  |  specialist=0.07</text>
+</svg>

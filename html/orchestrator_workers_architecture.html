@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Implement the "Orchestrator-Workers" LLM Orchestration Pattern</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 880px; margin: 40px auto; padding: 0 20px; line-height: 1.55; color: #1d1d1f; }
+  h1 { font-size: 1.7rem; border-bottom: 3px solid #2e7d32; padding-bottom: 8px; }
+  h2 { font-size: 1.3rem; color: #2e7d32; margin-top: 2.2em; }
+  h3 { font-size: 1.05rem; margin-top: 1.4em; }
+  pre { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; padding: 14px; overflow-x: auto; }
+  code { background: #f6f8fa; border-radius: 4px; padding: 2px 5px; font-size: 0.92em; }
+  pre code { background: none; padding: 0; }
+  ul { padding-left: 1.4em; }
+  li { margin-bottom: 6px; }
+  .badge { display: inline-block; background: #2e7d32; color: #fff; border-radius: 4px; padding: 3px 10px; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.03em; }
+  .badge + .badge { margin-left: 6px; }
+  blockquote { border-left: 4px solid #ffa000; margin: 0; padding: 6px 16px; background: #fff8e1; color: #5d4037; font-style: italic; }
+  .files li { margin-bottom: 14px; }
+  .lifecycle li { margin-bottom: 10px; }
+  .lifecycle code.tag { background: #e8f5e9; color: #2e7d32; font-weight: 600; }
+  img.diagram { max-width: 100%; display: block; margin: 0 auto; border: 1px solid #e1e4e8; border-radius: 6px; padding: 12px; background: #fff; }
+  .figcaption { text-align: center; color: #6e6e73; font-size: 0.85rem; margin-top: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid #e1e4e8; vertical-align: top; }
+  th { color: #6e6e73; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  hr { border: none; border-top: 1px solid #e1e4e8; margin: 2.5em 0; }
+</style>
+</head>
+<body>
+
+<span class="badge">PART 2 / SERIES</span>
+<span class="badge" style="background:#1565c0;">IMPLEMENTED</span>
+<h1>Orchestrator-Workers: how <code>/orchestrate</code> works</h1>
+
+<p style="color:#6e6e73; font-size:0.95rem;">Part 2 of the LLM orchestration patterns series. Part 1 covered <a href="plan_adaptive_routing.html">Adaptive Routing</a> (query &rarr; router &rarr; one of three models). This one covers a genuinely different shape: fan-out to parallel specialists, then synthesize.</p>
+
+<h2>Context</h2>
+<p>Part 1's <strong>Adaptive Routing</strong> pattern sends a query down exactly one branch &mdash; small, frontier, or specialist &mdash; and returns that branch's answer directly. It's cheap and simple, but it can't combine perspectives: a query that genuinely needs both research and code reasoning has to pick one.</p>
+
+<p>This pattern is different. The reference diagram shows <strong>Orchestrator-Workers</strong>:</p>
+<pre><code>Orchestrator &rarr; { Research | Code | Analysis } &rarr; Synthesise &rarr; output</code></pre>
+<blockquote>"Best for: Deep research, multi-step projects"</blockquote>
+
+<p>A lead LLM decomposes the incoming question and dispatches it to whichever of three specialist workers are actually relevant &mdash; not always all three &mdash; each running independently. A synthesis step then merges their outputs into one coherent answer. This was added as a new <code>POST /orchestrate</code> endpoint alongside the existing <code>/query</code> routing endpoint from Part 1, reusing the same <code>OpenAILLM</code> wrapper and FastAPI plumbing.</p>
+
+<h2>The compiled graph</h2>
+<img class="diagram" src="../assets/orchestrator_graph_visualization.png" alt="Compiled LangGraph diagram: start flows to plan_tasks, which conditionally dispatches to analysis_worker, code_worker, and research_worker, all converging on synthesize, then end.">
+<p class="figcaption">Rendered directly from the compiled graph via <code>.get_graph().draw_mermaid_png()</code> &mdash; not hand-drawn. Dotted edges are the conditional dispatch; only the workers the plan selects actually run.</p>
+
+<h2>Design</h2>
+
+<p><strong>Orchestrator</strong>: an LLM call with structured output (<code>OrchestrationPlan</code>) that decides which of three workers are relevant to the query and writes a tailored instruction for each one it selects. Unlike Part 1's router, this isn't a single choice among three &mdash; any subset (1, 2, or 3) can be selected.</p>
+
+<p><strong>Workers</strong> (one node per branch, all appending to a shared <code>worker_results</code> list):</p>
+<ul>
+  <li><code>research_worker</code> &mdash; gathers and synthesizes background information, context, and prior art</li>
+  <li><code>code_worker</code> &mdash; reasons about implementation approaches, architecture, and technical feasibility</li>
+  <li><code>analysis_worker</code> &mdash; evaluates tradeoffs, risk, and structured comparisons</li>
+</ul>
+
+<p><strong>Graph wiring</strong> (<code>OrchestratorGraphBuilder.build_graph</code>):</p>
+<pre><code>START &rarr; plan_tasks &rarr;(conditional list of destinations)&rarr; { research_worker | code_worker | analysis_worker }* &rarr; synthesize &rarr; END</code></pre>
+<p>The conditional edge returns a <em>list</em> of node names rather than a single choice, so LangGraph fans out to only the selected workers in the same superstep &mdash; genuine wall-clock parallelism on its own thread pool, no async rewrite required. <code>synthesize</code> fires exactly once regardless of whether 1, 2, or 3 workers were dispatched.</p>
+
+<h3>Request lifecycle</h3>
+<ol class="lifecycle">
+  <li><code class="tag">LLM CALL</code> &mdash; <strong>Plan</strong>: <code>plan_tasks</code> classifies the query into a per-worker instruction plan.</li>
+  <li><code class="tag">GRAPH</code> &mdash; <strong>Route</strong>: <code>route_to_workers</code> reads the plan and returns only the relevant node names.</li>
+  <li><code class="tag">LLM CALLS · PARALLEL</code> &mdash; <strong>Dispatch</strong>: selected workers run concurrently, each with its own persona prompt.</li>
+  <li><strong>Collect</strong>: each worker appends <code>{worker, instruction, output}</code> to <code>worker_results</code>, reducer-merged via <code>operator.add</code> so parallel writes don't clobber each other.</li>
+  <li><strong>Fan-in</strong>: <code>synthesize</code> waits for whichever branches actually ran, not a fixed count of three.</li>
+  <li><code class="tag">LLM CALL</code> &mdash; <strong>Synthesize</strong>: worker outputs are merged into one final answer.</li>
+</ol>
+<p><strong>Cost per request:</strong> 1 planning call + N worker calls (N = 1&ndash;3, run in parallel) + 1 synthesis call &mdash; 2 to 5 LLM calls total, depending on the plan.</p>
+
+<h2>Files</h2>
+<ol class="files">
+  <li>
+    <strong><code>state/orchestrator_state.py</code></strong> (new) &mdash; <code>OrchestratorState</code> TypedDict: <code>query</code>, <code>plan</code>, <code>context</code> and <code>worker_results</code> (both <code>Annotated[List[dict], operator.add]</code> so parallel writes merge), <code>answer</code>.
+  </li>
+  <li>
+    <strong><code>prompts/orchestrator_prompts.py</code></strong> (new) &mdash; orchestrator decomposition prompt, one persona prompt per worker, and a synthesis prompt, following the existing <code>ChatPromptTemplate.from_messages</code> style from Part 1's <code>prompts/prompt.py</code>.
+  </li>
+  <li>
+    <strong><code>nodes/orchestrator_nodes.py</code></strong> (new) &mdash; <code>OrchestrationPlan</code> (Pydantic, optional per-worker instruction fields), <code>plan_tasks</code>, <code>route_to_workers</code>, the three worker nodes (thin wrappers over a shared <code>_run_worker</code> helper), <code>synthesize</code>.
+  </li>
+  <li>
+    <strong><code>graph/orchestrator_graph_builder.py</code></strong> (new) &mdash; <code>OrchestratorGraphBuilder</code>, structurally parallel to Part 1's <code>GraphBuilder</code> but with dynamic fan-out/fan-in instead of single-branch routing.
+  </li>
+  <li>
+    <strong><code>models/models.py</code></strong> (appended) &mdash; <code>WorkerResult</code> and <code>OrchestrationResponse</code>. Reuses the existing <code>QueryRequest</code> for the request body.
+  </li>
+  <li>
+    <strong><code>server.py</code></strong> (appended) &mdash; new <code>POST /orchestrate</code> route, same <code>asyncio.to_thread</code> shape as the existing <code>/query</code> handler.
+  </li>
+</ol>
+
+<h2>Try it</h2>
+<table>
+  <thead><tr><th>Question</th><th>Expected dispatch</th></tr></thead>
+  <tbody>
+    <tr><td>"We are considering moving our monolith to microservices. What should we know, how would we approach the migration, and is it worth the risk?"</td><td>all three workers</td></tr>
+    <tr><td>"Write a Python function that deduplicates a list while preserving order."</td><td>code only</td></tr>
+    <tr><td>"What year was Python 3 released?"</td><td>research only</td></tr>
+    <tr><td>"SQL vs NoSQL for a high-write logging system &mdash; what are the tradeoffs?"</td><td>analysis-heavy, usually skips code</td></tr>
+  </tbody>
+</table>
+
+<pre><code>curl -s -X POST localhost:8000/orchestrate \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "..."}'</code></pre>
+<p>The response includes <code>plan</code> and <code>workers_used</code> so you can see exactly which workers the LLM chose and why &mdash; worth running the same question twice, since the choice isn't fully deterministic.</p>
+
+<h2>Verification</h2>
+<ul>
+  <li>Start the server (<code>python server.py</code> or <code>uvicorn server:app --reload</code>) and exercise <code>/orchestrate</code> with the questions above; confirm <code>workers_used</code> plausibly matches the question, and <code>answer</code> is a coherent merge rather than one worker's raw output.</li>
+  <li>Confirm <code>/health</code> and the existing <code>/query</code> endpoint from Part 1 still work unmodified &mdash; this was additive, not a rewrite.</li>
+</ul>
+
+<h2>What's next &mdash; Part 3</h2>
+<p>Both patterns so far have a <strong>fixed shape</strong>: Part 1 picks one of three branches, Part 2 fans out to a known set of three workers. Neither loops, and neither can course-correct mid-task based on what it just learned.</p>
+
+<p>Part 3 will cover <strong>Autonomous (ReAct)</strong>: an agent that reasons, acts, and observes in a loop until it decides the task is done, rather than following a graph laid out in advance.</p>
+<pre><code>Query &rarr; Thought &rarr; Action (tool call) &rarr; Observation &rarr; ...loop... &rarr; Final answer</code></pre>
+<blockquote>"Best for: open-ended tasks, tool use, and problems where the number of steps isn't known up front"</blockquote>
+<p>The interesting design questions for this one: how many iterations to allow before forcing a stop, how to expose real tools (the current codebase has none yet &mdash; no search, no code execution), and how to keep a running scratchpad of observations across loop iterations without it blowing up the context window.</p>
+
+<hr>
+<p style="color:#888; font-size:0.85rem;">Part 2 of the LLM orchestration patterns series &middot; Part 1: <a href="plan_adaptive_routing.html">Adaptive Routing</a> &middot; Part 3: Autonomous (ReAct) &mdash; coming next &middot; diagram source: reference orchestrator-workers pattern image.</p>
+
+</body>
+</html>
