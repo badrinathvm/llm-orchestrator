@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How the Agent Decides What to Call Next</title>
+<style>
+  :root {
+    --bg: #eef0f4;
+    --surface: #ffffff;
+    --surface-2: #e6e8ee;
+    --ink: #14161c;
+    --ink-soft: #565b68;
+    --ink-faint: #8a8f9c;
+    --rule: #d7dae2;
+
+    --accent: #4338ca;
+    --accent-soft: #eae9fb;
+    --accent-ink: #ffffff;
+
+    --human: #a1590a;
+    --human-soft: #f7ead6;
+    --ai: #4338ca;
+    --ai-soft: #eae9fb;
+    --tool: #0d7d76;
+    --tool-soft: #dcf1ee;
+
+    --warn: #a3401f;
+    --warn-soft: #f7e4dc;
+
+    --font-display: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12141a;
+      --surface: #1a1d25;
+      --surface-2: #21252e;
+      --ink: #e8eaf0;
+      --ink-soft: #a4a9b6;
+      --ink-faint: #6d7280;
+      --rule: #2b2f3a;
+
+      --accent: #8b85f0;
+      --accent-soft: #232047;
+      --accent-ink: #14161c;
+
+      --human: #e0a355;
+      --human-soft: #2c2116;
+      --ai: #8b85f0;
+      --ai-soft: #232047;
+      --tool: #4fc3b8;
+      --tool-soft: #142a28;
+
+      --warn: #e08a63;
+      --warn-soft: #2c1e16;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12141a;
+    --surface: #1a1d25;
+    --surface-2: #21252e;
+    --ink: #e8eaf0;
+    --ink-soft: #a4a9b6;
+    --ink-faint: #6d7280;
+    --rule: #2b2f3a;
+    --accent: #8b85f0;
+    --accent-soft: #232047;
+    --accent-ink: #14161c;
+    --human: #e0a355;
+    --human-soft: #2c2116;
+    --ai: #8b85f0;
+    --ai-soft: #232047;
+    --tool: #4fc3b8;
+    --tool-soft: #142a28;
+    --warn: #e08a63;
+    --warn-soft: #2c1e16;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef0f4;
+    --surface: #ffffff;
+    --surface-2: #e6e8ee;
+    --ink: #14161c;
+    --ink-soft: #565b68;
+    --ink-faint: #8a8f9c;
+    --rule: #d7dae2;
+    --accent: #4338ca;
+    --accent-soft: #eae9fb;
+    --accent-ink: #ffffff;
+    --human: #a1590a;
+    --human-soft: #f7ead6;
+    --ai: #4338ca;
+    --ai-soft: #eae9fb;
+    --tool: #0d7d76;
+    --tool-soft: #dcf1ee;
+    --warn: #a3401f;
+    --warn-soft: #f7e4dc;
+  }
+
+  * { box-sizing: border-box; }
+  html { color-scheme: light dark; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page { max-width: 980px; margin: 0 auto; padding: 52px 24px 100px; }
+
+  header.hero {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .eyebrow {
+    font-family: var(--font-display);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 2rem;
+    line-height: 1.2;
+    margin: 0;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  .subtitle { color: var(--ink-soft); max-width: 64ch; font-size: 1.02rem; text-wrap: pretty; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 240px;
+    gap: 28px;
+    margin-top: 40px;
+    align-items: start;
+  }
+  @media (max-width: 760px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  .col-head {
+    font-family: var(--font-display);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .col-head .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* ---- ledger (messages the model reads) ---- */
+  .ledger { position: relative; display: flex; flex-direction: column; gap: 0; }
+  .spine {
+    position: absolute;
+    left: 27px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    background: linear-gradient(var(--rule), var(--rule));
+  }
+
+  .entry { position: relative; display: grid; grid-template-columns: 56px 1fr; gap: 14px; padding-bottom: 20px; }
+  .entry:last-child { padding-bottom: 0; }
+  .idx {
+    position: relative;
+    z-index: 1;
+    width: 56px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 6px;
+  }
+  .idx .num {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+    background: var(--bg);
+    padding: 2px 4px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card.human { border-left: 3px solid var(--human); }
+  .card.ai { border-left: 3px solid var(--ai); }
+  .card.tool { border-left: 3px solid var(--tool); }
+
+  .role-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .role {
+    font-family: var(--font-display);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .role.human { background: var(--human-soft); color: var(--human); }
+  .role.ai { background: var(--ai-soft); color: var(--ai); }
+  .role.tool { background: var(--tool-soft); color: var(--tool); }
+
+  .call-tag {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--ink-faint);
+    border: 1px dashed var(--rule);
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+
+  .content { font-size: 0.92rem; color: var(--ink); }
+  .content.mono { font-family: var(--font-mono); font-size: 0.82rem; color: var(--ink-soft); line-height: 1.6; }
+  .tool-call {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    background: var(--surface-2);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 4px;
+    color: var(--ink);
+  }
+  .tool-call + .tool-call { margin-top: 6px; }
+  .tool-call .fn { color: var(--ai); }
+
+  .observation {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+  }
+
+  .note-inline {
+    font-size: 0.8rem;
+    color: var(--ink-faint);
+    margin-top: 8px;
+    font-style: italic;
+  }
+
+  /* loop-back marker */
+  .loopback {
+    position: relative;
+    margin: 4px 0 20px 56px;
+    padding: 10px 14px;
+    border: 1px dashed var(--accent);
+    border-radius: 8px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 0.82rem;
+    font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .loopback svg { flex-shrink: 0; }
+
+  /* ---- trace rail (not seen by the model) ---- */
+  .rail {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 16px;
+    position: sticky;
+    top: 24px;
+  }
+  .rail .col-head { color: var(--ink-faint); }
+  .trace-item {
+    border-bottom: 1px solid var(--rule);
+    padding: 10px 0;
+    font-size: 0.8rem;
+  }
+  .trace-item:last-child { border-bottom: none; padding-bottom: 0; }
+  .trace-item:first-child { padding-top: 0; }
+  .trace-item .k { font-family: var(--font-mono); color: var(--ink-faint); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .trace-item .v { color: var(--ink); font-family: var(--font-mono); font-size: 0.78rem; }
+  .trace-item .iter {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    background: var(--surface-2);
+    color: var(--ink-soft);
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-bottom: 4px;
+  }
+  .rail-note {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+    font-size: 0.76rem;
+    color: var(--ink-faint);
+    line-height: 1.55;
+  }
+
+  section.explain { margin-top: 48px; }
+  section.explain h2 {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+  section.explain p { max-width: 68ch; color: var(--ink-soft); margin: 0 0 12px; }
+  section.explain p:last-child { margin-bottom: 0; }
+  code.inline {
+    font-family: var(--font-mono);
+    font-size: 0.87em;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+  }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+  @media (max-width: 700px) { .split { grid-template-columns: 1fr; } }
+  .split .box { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; }
+  .split .box h3 {
+    font-family: var(--font-display);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin: 0 0 8px;
+  }
+  .split .box.messages h3 { color: var(--ai); }
+  .split .box.trace h3 { color: var(--ink-faint); }
+  .split .box p { font-size: 0.88rem; margin: 0; }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    color: var(--ink-faint);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="hero">
+    <div class="eyebrow">reason() ↔ act() · internal mechanics</div>
+    <h1>How the agent decides what to call next</h1>
+    <p class="subtitle">
+      There's no planner deciding "call this tool next." <code class="inline">reason()</code> re-reads the
+      entire message history on every pass, and the LLM decides fresh each time — because every prior
+      observation is sitting right there in the transcript it's about to read again.
+    </p>
+  </header>
+
+  <div class="layout">
+    <div>
+      <div class="col-head"><span class="dot" style="color:var(--ai)"></span>state["messages"] — what the LLM reads, every single pass</div>
+
+      <div class="ledger">
+        <div class="spine"></div>
+
+        <div class="entry">
+          <div class="idx"><span class="num">[0]</span></div>
+          <div class="card human">
+            <div class="role-row"><span class="role human">Human</span></div>
+            <div class="content">"My order A1002 arrived damaged, can I get a refund?"</div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="idx"><span class="num">[1]</span></div>
+          <div class="card ai">
+            <div class="role-row"><span class="role ai">AI · reason() pass 1</span></div>
+            <div class="content mono">requests two tool calls in the same turn:</div>
+            <div class="tool-call"><span class="fn">lookup_order</span>(order_id="A1002") <span class="call-tag">call_1</span></div>
+            <div class="tool-call"><span class="fn">calculate_refund</span>(order_id="A1002", reason="damaged item") <span class="call-tag">call_2</span></div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="idx"><span class="num">[2]</span></div>
+          <div class="card tool">
+            <div class="role-row"><span class="role tool">Tool</span><span class="call-tag">call_1</span></div>
+            <div class="observation">"Order A1002: Ceramic Coffee Mug Set, total $34.50, delivered 3 day(s) ago, damage reported: True."</div>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="idx"><span class="num">[3]</span></div>
+          <div class="card tool">
+            <div class="role-row"><span class="role tool">Tool</span><span class="call-tag">call_2</span></div>
+            <div class="observation">"Approved: full refund of $34.50 for order A1002 (item reported damaged/defective)."</div>
+            <div class="note-inline">act() runs both calls in this one pass, then increments iterations 0 → 1 — once, not twice.</div>
+          </div>
+        </div>
+
+        <div class="loopback">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13 3v4a3 3 0 0 1-3 3H3M3 10l3-3M3 10l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          reason() is called again — with [0] through [3] all back in front of it
+        </div>
+
+        <div class="entry">
+          <div class="idx"><span class="num">[4]</span></div>
+          <div class="card ai">
+            <div class="role-row"><span class="role ai">AI · reason() pass 2</span><span class="call-tag">no tool_calls</span></div>
+            <div class="content">"Your order A1002 for the Ceramic Coffee Mug Set … is eligible for a full refund of $34.50 due to the item being damaged. The refund has been approved."</div>
+            <div class="note-inline">should_continue() sees no tool_calls here → routes to END. This content becomes the final answer.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside>
+      <div class="rail">
+        <div class="col-head">state["trace"] — logged, not read</div>
+        <div class="trace-item">
+          <div class="iter">iteration 1</div>
+          <div class="k">action</div>
+          <div class="v">lookup_order</div>
+        </div>
+        <div class="trace-item">
+          <div class="iter">iteration 1</div>
+          <div class="k">action</div>
+          <div class="v">calculate_refund</div>
+        </div>
+        <div class="rail-note">
+          Both entries share <span class="v" style="font-size:0.78rem">iteration 1</span> — the counter tracks
+          passes through <code class="inline">act()</code>, not individual tool calls. This list only ever
+          reaches the API response; the model in <code class="inline">reason()</code> never sees it.
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <section class="explain">
+    <h2>Two separate lists, one job each</h2>
+    <p>
+      <code class="inline">ReactState.messages</code> uses <code class="inline">add_messages</code> as its
+      reducer, so it only ever grows — nothing is edited or removed once appended. Every
+      <code class="inline">reason()</code> call passes this whole list to the LLM, which is the entire
+      mechanism: the model isn't told what to call next by any code in this repo, it infers it by reading
+      what it already asked for and what came back, same as you would scrolling back up a chat.
+    </p>
+    <p>
+      A <code class="inline">tool_call_id</code> is the one piece of bookkeeping that matters here — it's how
+      a <code class="inline">ToolMessage</code> gets matched back to the specific call that requested it,
+      which is required once more than one call lands in the same turn, as happened at <code class="inline">[1]</code> above.
+    </p>
+    <div class="split">
+      <div class="box messages">
+        <h3>messages</h3>
+        <p>Sent to the LLM on every <code class="inline">reason()</code> call. This is the only thing the model ever sees — its entire "memory" of the conversation.</p>
+      </div>
+      <div class="box trace">
+        <h3>trace</h3>
+        <p>Built purely for the <code class="inline">/agent</code> API response and for a human to inspect afterward. Structurally identical information, different audience.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>llm-orchestration · pattern 3/3</span>
+    <span>nodes/react_nodes.py · reason() / act()</span>
+  </footer>
+
+</div>
+
+</body>
+</html>

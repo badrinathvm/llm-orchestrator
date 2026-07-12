@@ -24,3 +24,18 @@ class OrchestrationResponse(BaseModel):
     workers_used: List[str]
     plan: dict
     worker_results: List[WorkerResult]
+
+
+class AgentStep(BaseModel):
+    iteration: int
+    thought: str
+    action: str
+    action_input: dict
+    observation: str
+
+
+class AgentResponse(BaseModel):
+    answer: str
+    iterations: int
+    tools_used: List[str]
+    trace: List[AgentStep]

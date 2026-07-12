@@ -4,9 +4,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from models.models import OrchestrationResponse, QueryRequest, QueryResponse
+from models.models import AgentResponse, OrchestrationResponse, QueryRequest, QueryResponse
 from graph.graph_builder import GraphBuilder
 from graph.orchestrator_graph_builder import OrchestratorGraphBuilder
+from graph.react_graph_builder import ReactGraphBuilder
 from llm.llm import OpenAILLM
 
 load_dotenv()
@@ -57,6 +58,22 @@ async def orchestrate(req: QueryRequest):
         workers_used=workers_used,
         plan=response["plan"],
         worker_results=response["worker_results"],
+    )
+
+
+@app.post("/agent", response_model=AgentResponse)
+async def agent(req: QueryRequest):
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="question must not be empty")
+
+    response = await asyncio.to_thread(ReactGraphBuilder().run, req.question)
+    tools_used = sorted({s["action"] for s in response["trace"]})
+
+    return AgentResponse(
+        answer=response["answer"],
+        iterations=response["iterations"],
+        tools_used=tools_used,
+        trace=response["trace"],
     )
 
 
